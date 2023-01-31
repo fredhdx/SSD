@@ -91,6 +91,7 @@ if not args.test:
         avg_count = 0
         power_print(f'...training', logfile)
         for i, data in enumerate(dataloader, 0):
+            tmp_time = time.time()
             images_, ann_box_, ann_confidence_, img_names, img_height, img_width = data
             images = images_.cuda()
             ann_box = ann_box_.cuda()
@@ -105,7 +106,7 @@ if not args.test:
             avg_loss += loss_net.data
             avg_count += 1
             # if (i+1) % 100 == 0:
-            print(f'...image {i+1}/{train_size}')
+            print(f'...cost {int(time.time() - tmp_time)} seconds for image {i+1}/{train_size}')
 
         train_losses.append((avg_loss/avg_count).cpu().numpy())
         power_print('[%d] time: %f train loss: %f' % (epoch, time.time()-start_time, avg_loss/avg_count), logfile)
