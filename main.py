@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from dataset import *
 from model import *
 from utils import *
+from datetime import datetime
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--test', action='store_true')
@@ -44,6 +45,12 @@ network = SSD(class_num)
 network.cuda()
 cudnn.benchmark = True
 
+def power_print(msg, fp):
+    print(msg)
+    fp.write(msg + "\n")
+    fp.flush()
+
+
 print('--------- SETTING UP ----------')
 print(f'args: {args}')
 
@@ -62,14 +69,18 @@ if not args.test:
     train_losses = []  # accu train loss over epochs
     val_losses = []  # accu val loss over epochs
     train_size = len(dataloader)
+
+    logfile = open(f'train_{datetime.now().strftime("%m%d_%H_%M")}.log',  'w')
+    power_print(datetime.now().strftime("%Y/%m/%d %H:%M"), logfile)
+
     for epoch in range(num_epochs):
-        print(f'---------- EPOCH {epoch + 1} ------------')
+        power_print(f'---------- EPOCH {epoch + 1} ------------', logfile)
         #TRAINING
         network.train()
 
         avg_loss = 0
         avg_count = 0
-        print(f'...training')
+        power_print(f'...training', logfile)
         for i, data in enumerate(dataloader, 0):
             images_, ann_box_, ann_confidence_, img_name, img_height, img_width = data
             images = images_.cuda()
@@ -88,17 +99,18 @@ if not args.test:
             print(f'...image {i+1}/{train_size}')
 
         train_losses.append((avg_loss/avg_count).cpu().numpy())
-        print('[%d] time: %f train loss: %f' % (epoch, time.time()-start_time, avg_loss/avg_count))
+        power_print('[%d] time: %f train loss: %f' % (epoch, time.time()-start_time, avg_loss/avg_count), logfile)
         
         #visualize
         pred_confidence_ = pred_confidence[0].detach().cpu().numpy()
         pred_box_ = pred_box[0].detach().cpu().numpy()
+        pred_confidence_, pred_box_ = non_maximum_suppression(pred_confidence_, pred_box_, boxs_default)
         windowname = f'train_result/train_{epoch + 1}_{img_name}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         
         
         #VALIDATION
-        print(f'...validating')
+        power_print(f'...validating', logfile)
         network.eval()
         
         # TODO: split the dataset into 90% training and 10% validation
@@ -128,11 +140,12 @@ if not args.test:
             
 
         val_losses.append((avg_loss_val/avg_count_val).cpu().numpy())
-        print('[%d] time: %f val loss: %f' % (epoch, time.time()-start_time, avg_loss_val/avg_count_val))
+        power_print('[%d] time: %f val loss: %f' % (epoch, time.time()-start_time, avg_loss_val/avg_count_val), logfile)
 
         #visualize
         pred_confidence_ = pred_confidence[0].detach().cpu().numpy()
         pred_box_ = pred_box[0].detach().cpu().numpy()
+        pred_confidence_, pred_box_ = non_maximum_suppression(pred_confidence_, pred_box_, boxs_default)
         windowname = f'val_result/val_{epoch + 1}_{img_name}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         
@@ -144,13 +157,21 @@ if not args.test:
         if epoch % 10==9:
             #save last network
             print('saving net...')
+            logfile.write(f'saving net: network_{epoch+1}.pth\n')
+            logfile.flush()
             torch.save(network.state_dict(), f'network_{epoch+1}.pth')
+
+    logfile.close()
+
 else:
     #TEST
     dataset_test = COCO("data/test/images/", "data/test/annotations/", class_num, boxs_default, train = False, image_size=320)
     dataloader_test = torch.utils.data.DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=0)
     network.load_state_dict(torch.load('network.pth'))
     network.eval()
+
+    # logfile = open(f'test_{datetime.now().strftime("%m%d_%H_%M")}.log',  'w')
+    # logfile.write(datetime.now().strftime("%Y/%m/%d %H:%M") + "\n")
     
     for i, data in enumerate(dataloader_test, 0):
         images_, ann_box_, ann_confidence_, img_name, img_height, img_width = data
@@ -177,6 +198,3 @@ else:
         windowname = f'test_result/test_{img_name}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         cv2.waitKey(1000)
-
-
-

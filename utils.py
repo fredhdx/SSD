@@ -17,10 +17,12 @@ def visualize_pred(windowname, pred_confidence, pred_box, ann_confidence, ann_bo
     #ann_box         -- the ground truth bounding boxes, [num_of_boxes, 4]
     #image_          -- the input image to the network
     #boxs_default    -- default bounding boxes, [num_of_boxes, 8]
+
+    image_ = image_ * 255
     
     _, class_num = pred_confidence.shape
     #class_num = 4
-    class_num = class_num-1
+    class_num = class_num - 1
     #class_num = 3 now, because we do not need the last class (background)
     
     image = np.transpose(image_, (1,2,0)).astype(np.uint8) # (h, w, c)
