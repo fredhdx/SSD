@@ -258,7 +258,6 @@ class COCO(torch.utils.data.Dataset):
         ])
 
         image = preprocessing(img)
-        image = image / 255.
 
         # if self.train:
         #     image = self.colorJitter(image)

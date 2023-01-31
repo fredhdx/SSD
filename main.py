@@ -34,7 +34,16 @@ class_num = 4 #cat dog person background
 
 num_epochs = 100
 batch_size = 32
-lr = 1e-4
+lr = 1e-3
+
+# 
+dirpath = os.getcwd()
+if not os.path.isdir(dirpath + "/val_result"):
+    os.mkdir(dirpath + "/val_result")
+if not os.path.isdir(dirpath + "/train_result"):
+    os.mkdir(dirpath + "/train_result")
+if not os.path.isdir(dirpath + "/test_result"):
+    os.mkdir(dirpath + "/test_result")
 
 
 boxs_default = default_box_generator([10,5,3,1], [0.2,0.4,0.6,0.8], [0.1,0.3,0.5,0.7])
@@ -82,7 +91,7 @@ if not args.test:
         avg_count = 0
         power_print(f'...training', logfile)
         for i, data in enumerate(dataloader, 0):
-            images_, ann_box_, ann_confidence_, img_name, img_height, img_width = data
+            images_, ann_box_, ann_confidence_, img_names, img_height, img_width = data
             images = images_.cuda()
             ann_box = ann_box_.cuda()
             ann_confidence = ann_confidence_.cuda()
@@ -105,7 +114,7 @@ if not args.test:
         pred_confidence_ = pred_confidence[0].detach().cpu().numpy()
         pred_box_ = pred_box[0].detach().cpu().numpy()
         pred_confidence_, pred_box_ = non_maximum_suppression(pred_confidence_, pred_box_, boxs_default)
-        windowname = f'train_result/train_{epoch + 1}_{img_name}'
+        windowname = f'train_result/train_{epoch + 1}_{img_names[0]}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         
         
@@ -119,7 +128,7 @@ if not args.test:
         avg_loss_val = 0
         avg_count_val = 0
         for i, data in enumerate(dataloader_test, 0):
-            images_, ann_box_, ann_confidence_, img_name, img_height, img_width = data
+            images_, ann_box_, ann_confidence_, img_names, img_height, img_width = data
             images = images_.cuda()
             ann_box = ann_box_.cuda()
             ann_confidence = ann_confidence_.cuda()
@@ -146,7 +155,7 @@ if not args.test:
         pred_confidence_ = pred_confidence[0].detach().cpu().numpy()
         pred_box_ = pred_box[0].detach().cpu().numpy()
         pred_confidence_, pred_box_ = non_maximum_suppression(pred_confidence_, pred_box_, boxs_default)
-        windowname = f'val_result/val_{epoch + 1}_{img_name}'
+        windowname = f'val_result/val_{epoch + 1}_{img_names[0]}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         
         #optional: compute F1
@@ -174,7 +183,7 @@ else:
     # logfile.write(datetime.now().strftime("%Y/%m/%d %H:%M") + "\n")
     
     for i, data in enumerate(dataloader_test, 0):
-        images_, ann_box_, ann_confidence_, img_name, img_height, img_width = data
+        images_, ann_box_, ann_confidence_, img_names, img_height, img_width = data
         images = images_.cuda()
         ann_box = ann_box_.cuda()
         ann_confidence = ann_confidence_.cuda()
@@ -195,6 +204,6 @@ else:
         # pred_confidence_,pred_box_ = non_maximum_suppression(pred_confidence_,pred_box_,boxs_default)
         # write_txt(pred_box_, boxs_default, pred_confidence_, img_name_[0], height_origin, width_origin,args.txt)
         
-        windowname = f'test_result/test_{img_name}'
+        windowname = f'test_result/test_{img_names[0]}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         cv2.waitKey(1000)
