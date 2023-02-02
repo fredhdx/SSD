@@ -262,4 +262,4 @@ class COCO(torch.utils.data.Dataset):
         # if self.train:
         #     image = self.colorJitter(image)
 
-        return image, torch.from_numpy(ann_box), torch.from_numpy(ann_confidence), self.img_names[index][:-3], img_height, img_width
+        return image, torch.from_numpy(ann_box), torch.from_numpy(ann_confidence), self.img_names[index][:-4], img_height, img_width

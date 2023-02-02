@@ -48,11 +48,10 @@ def SSD_loss(pred_confidence, pred_box, ann_confidence, ann_box):
 
     # get non-empty indices
     indicies_obj = torch.where(ann_confidence[:, -1] == 0)[0]
-    indicies_noobj = torch.where(ann_confidence[:, -1] != 0)[0]
 
     # cls loss
     loss_cls_obj = F.cross_entropy(pred_confidence[indicies_obj], ann_confidence[indicies_obj])
-    loss_cls_noobj = F.cross_entropy(pred_confidence[indicies_noobj], ann_confidence[indicies_noobj])
+    loss_cls_noobj = F.cross_entropy(pred_confidence[~indicies_obj], ann_confidence[~indicies_obj])
     loss_cls = loss_cls_obj + 3 * loss_cls_noobj
 
     # box loss
@@ -197,7 +196,10 @@ class SSD(nn.Module):
 
 
 
-
+if __name__ == "__main__":
+    network = SSD(4)
+    img = torch.randn((8, 3, 320, 320))
+    confidence, bboxes = network(img)
 
 
 

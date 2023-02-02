@@ -30,10 +30,10 @@ def visualize_pred(windowname, pred_confidence, pred_box, ann_confidence, ann_bo
     image2 = np.zeros(image.shape,np.uint8)
     image3 = np.zeros(image.shape,np.uint8)
     image4 = np.zeros(image.shape,np.uint8)
-    image1[:]=image[:]
-    image2[:]=image[:]
-    image3[:]=image[:]
-    image4[:]=image[:]
+    image1[:]=image[:]  # gt
+    image2[:]=image[:]  # gt default boxes
+    image3[:]=image[:]  # predicated bbox
+    image4[:]=image[:]  # predicated default boxes
     #image1: draw ground truth bounding boxes on image1
     #image2: draw ground truth "default" boxes on image2 (to show that you have assigned the object to the correct cell/cells)
     #image3: draw network-predicted bounding boxes on image3
@@ -115,7 +115,7 @@ def relative_boxes_to_absolute(box_, boxs_default):
 
     return gt_boxes
 
-def non_maximum_suppression(confidence_, box_, boxs_default, overlap=0.5, threshold=0.5):
+def non_maximum_suppression(confidence_, box_, boxs_default, overlap=0.3, threshold=0.5):
     #TODO: non maximum suppression
     #input:
     #confidence_  -- the predicted class labels from SSD, [num_of_boxes, num_of_classes]
@@ -155,10 +155,10 @@ def non_maximum_suppression(confidence_, box_, boxs_default, overlap=0.5, thresh
             # (including itself)
             ious = iou(gt_boxes, gt_boxes[idx, 4], gt_boxes[idx, 5], gt_boxes[idx, 6],
                        gt_boxes[idx, 7]) # iou(boxs_default, x_min, y_min, x_max, y_max)
-            ious = np.where(ious > overlap)[0]
-            box_[ious, :] = [0.] * 4
-            confidence_[ious, :] = [0, 0, 0, 1]
-            gt_boxes[ious, :] = [0.] * 8
+            overlap_idx = np.where(ious > overlap)[0]
+            box_[overlap_idx, :] = [0.] * 4
+            confidence_[overlap_idx, :] = [0, 0, 0, 1]
+            gt_boxes[overlap_idx, :] = [0.] * 8
         else:
             break
 
@@ -230,10 +230,29 @@ def generate_mAP(pred_boxes, true_boxes, threshold=0.5, num_classes=4):
                 
 
 
+def save_state(network, optimizer, epoch, train_losses, val_losses, fn):
+    torch.save({
+        'epoch': epoch,
+        'network_state': network.state_dict(),
+        'optimizer_state': optimizer.state_dict(),
+        'train_losses': train_losses,
+        'val_losses': val_losses
+    }, fn)
 
 
+def load_state(network, optimizer, fn):
+    ckp = torch.load(fn)
+    if "optimizer_state" in ckp:
+        network.load_state_dict(ckp["network_state"])
+        optimizer.load_state_dict(ckp["optimizer_state"])
+        return ckp["train_losses"], ckp["val_losses"], int(ckp["epoch"])
+    else:
+        network.load_state_dict(ckp)
+        return None, None, None  # fallback to old state file
 
 
-
-
-
+# print to log file as well
+def power_print(msg, fp):
+    print(msg)
+    fp.write(msg + "\n")
+    fp.flush()
