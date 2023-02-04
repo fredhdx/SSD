@@ -2,18 +2,12 @@ import argparse
 import os
 import numpy as np
 import time
-import cv2
 
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.utils.data
-import torchvision.datasets as dset
-import torchvision.transforms as transforms
-import torchvision.utils as vutils
-from torch.autograd import Variable
-import torch.nn.functional as F
 
 from dataset import *
 from model import *
@@ -23,6 +17,7 @@ from datetime import datetime
 parser = argparse.ArgumentParser()
 parser.add_argument('--test', action='store_true')  # run test evaluation
 parser.add_argument('--testrun', action='store_true')  # run a short test with 30 images
+parser.add_argument('--map', action='store_true')
 parser.add_argument('--pth')  # checkpoint file
 parser.add_argument('--testdir')  # optional testdir name: data/testname
 parser.add_argument('--nmsoverlap')
@@ -88,7 +83,7 @@ if not args.test:
 
     # load from saved state
     if args.pth:
-        power_print(f'loading state from {args.pth}')
+        power_print(f'loading state from {args.pth}', logfile)
         _train_losses, _val_losses, _start_epoch = load_state(network, optimizer, args.pth)
         if _start_epoch is not None:
             train_losses = _train_losses
@@ -106,13 +101,21 @@ if not args.test:
         power_print(f'...training', logfile)
         for i, data in enumerate(dataloader, 0):
             tmp_time = time.time()
+
             images_, ann_box_, ann_confidence_, img_names, img_height, img_width = data
             images = images_.to(device)
             ann_box = ann_box_.to(device)
             ann_confidence = ann_confidence_.to(device)
 
+            # print(f'ann_confidence shape: {ann_confidence.shape}')
+            # print(f'ann_box shape: {ann_box.shape}')
+
             optimizer.zero_grad()
             pred_confidence, pred_box = network(images)
+
+            # print(f'pred_confidence shape: {pred_confidence.shape}')
+            # print(f'pred_box shape: {pred_box.shape}')
+
             loss_net = SSD_loss(pred_confidence, pred_box, ann_confidence, ann_box)
             loss_net.backward()
             optimizer.step()
@@ -172,10 +175,6 @@ if not args.test:
         windowname = f'val_result/val_{epoch + 1}_{img_names[0]}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         
-        #optional: compute F1
-        #F1score = 2*precision*recall/np.maximum(precision+recall,1e-8)
-        #print(F1score)
-        
         #save weights
         if epoch % 10==9:
             #save last network
@@ -183,18 +182,19 @@ if not args.test:
             logfile.write(f'saving net: network_{epoch+1}.pth\n')
             logfile.flush()
             save_state(network, optimizer, epoch, train_losses, val_losses, f'network_{epoch+1}.pth')
-            # torch.save(network.state_dict(), f'network_{epoch+1}.pth')
 
     logfile.close()
 
 else:
-    lfn = f'test_{datetime.now().strftime("%m%d_%H")}.log'
-    lf_mode = 'a' if os.path.isfile(lfn) else 'w'
-    logfile = open(lfn, lf_mode)
-
     #TEST
-    testdir = args.testdir if args.testdir else 'test'
-    dataset_test = COCO(f"data/{testdir}/images/", f"data/{testdir}/annotations/", class_num, boxs_default, train = False, image_size=320)
+    if args.map:
+        dataset_test = COCO(f"data/train/images/", f"data/train/annotations/", class_num, boxs_default,
+                            train = False, image_size=320)  # use validation set
+    else:
+        testdir = args.testdir if args.testdir else 'test'
+        dataset_test = COCO(f"data/{testdir}/images/", f"", class_num, boxs_default, train = False,
+                            image_size=320)
+
     dataloader_test = torch.utils.data.DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=0)
     if args.pth:
         checkpoint = torch.load(args.pth)
@@ -206,39 +206,51 @@ else:
         raise Exception('checkpoint file name must be entered via "--pth /{name/}" for testing.')
 
 
-    # logfile = open(f'test_{datetime.now().strftime("%m%d_%H_%M")}.log',  'w')
-    # logfile.write(datetime.now().strftime("%Y/%m/%d %H:%M") + "\n")
     network.eval()
 
     total_annbox = []
-    total_anncon = []
+    total_annconf = []
     total_predbox = []
     total_predconf = []
 
     for i, data in enumerate(dataloader_test, 0):
-        print(f'batch {i+1}')
+        # print(f'batch {i+1}')
         images_, ann_box_, ann_confidence_, img_names, img_height, img_width = data
         images = images_.to(device)
         ann_box = ann_box_.to(device)
         ann_confidence = ann_confidence_.to(device)
-
         pred_confidence, pred_box = network(images)
 
-        pred_confidence_ = pred_confidence[0].detach().cpu().numpy()
-        pred_box_ = pred_box[0].detach().cpu().numpy()
-        
+        total_annbox.append(ann_box.detach().cpu().numpy())
+        total_annconf.append(ann_confidence.detach().cpu().numpy())
+        total_predbox.append(pred_box.detach().cpu().numpy())
+        total_predconf.append(pred_confidence.detach().cpu().numpy())
+
+
         #TODO: save predicted bounding boxes and classes to a txt file.
         #you will need to submit those files for grading this assignment
+        # draw a figure for last image in batch
         pred_confidence_ = pred_confidence[0].detach().cpu().numpy()
         pred_box_ = pred_box[0].detach().cpu().numpy()
-        # height_origin = height_[0].numpy()
-        # width_origin = width_[0].numpy()
         pred_confidence_, pred_box_ = non_maximum_suppression(pred_confidence_,pred_box_,boxs_default)
-        # write_txt(pred_box_, boxs_default, pred_confidence_, img_name_[0], height_origin, width_origin,args.txt)
         
         windowname = f'test_result/test_{img_names[0]}'
         visualize_pred(windowname, pred_confidence_, pred_box_, ann_confidence_[0].numpy(), ann_box_[0].numpy(), images_[0].numpy(), boxs_default)
         # cv2.waitKey(1000)
 
-        # mAP
-        # ann_box, ann_confidence, pred_confidence_, pred_box_: (32, 540, 4)
+
+    # get mAP
+    # ann_box, ann_confidence, pred_confidence_, pred_box_: (32, 540, 4)
+    if args.map:
+        print('compile torch output to mAP inputs')
+        pred_boxes, true_boxes = build_map_dataset(total_annbox, total_annconf, total_predbox, total_predconf,
+                                                boxs_default, num_classes=class_num)
+
+        print('calculating mAP score')
+        mAP_scores = []
+        _score = generate_mAP(pred_boxes, true_boxes, threshold=0.5, num_classes=4)
+        for _threshold in np.linspace(0.5, 0.95, 10):
+            _score = generate_mAP(pred_boxes, true_boxes, threshold=_threshold, num_classes=4)
+            print(f'threshold={_threshold}, score={_score}')
+            mAP_scores.append(_score)
+        print(f'average mAP: {sum(mAP_scores)/len(mAP_scores)}')

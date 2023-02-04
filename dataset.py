@@ -1,19 +1,9 @@
 import torch
-import torch.nn as nn
-import torch.backends.cudnn as cudnn
-import torch.optim as optim
 import torch.utils.data
-import torchvision.datasets as dset
 import torchvision.transforms as transforms
-import torchvision.utils as vutils
-from torch.autograd import Variable
-import torch.nn.functional as F
 import numpy as np
 import os
 import cv2
-import random
-
-from PIL import Image
 
 
 #generate default bounding boxes
@@ -137,6 +127,7 @@ class COCO(torch.utils.data.Dataset):
     def __init__(self, imgdir, anndir, class_num, boxs_default, train=True, 
                  image_size=320, brightness=0.24, contrast=0.15,
                  saturation=0.3, hue=0.14, testrun=False):
+
         self.train = train
         self.imgdir = imgdir
         self.anndir = anndir
@@ -199,21 +190,20 @@ class COCO(torch.utils.data.Dataset):
 
         class_id, x_min, y_min, x_max, y_max = [], [], [], [], []
 
-        # read annotations
-        with open(ann_name, 'r') as f:
-            for line in f:
-                _gt_tuple = line.strip().split(" ")
-                if len(_gt_tuple) != 5:  # skip if invalid
-                    continue
+        # read annotations for training and validation
+        if self.anndir != "":
+            with open(ann_name, 'r') as f:
+                for line in f:
+                    _gt_tuple = line.strip().split(" ")
+                    if len(_gt_tuple) != 5:  # skip if invalid
+                        continue
 
-                # TODO: confirm entry identify
-                class_id.append(int(_gt_tuple[0]))
-                gx_min, gy_min, gw, gh = [float(_) for _ in _gt_tuple[1:]]
-
-                x_min.append(gx_min)
-                y_min.append(gy_min)
-                x_max.append(gx_min + gw)
-                y_max.append(gy_min + gh)
+                    class_id.append(int(_gt_tuple[0]))
+                    gx_min, gy_min, gw, gh = [float(_) for _ in _gt_tuple[1:]]
+                    x_min.append(gx_min)
+                    y_min.append(gy_min)
+                    x_max.append(gx_min + gw)
+                    y_max.append(gy_min + gh)
 
         class_id = np.asarray(class_id)
         x_min = np.asarray(x_min)
@@ -247,19 +237,21 @@ class COCO(torch.utils.data.Dataset):
         x_max = x_max / img_width
         y_max = y_max / img_height
 
+        # generate ann_box and ann_confidence
         for i in range(len(x_max)):
             match(ann_box, ann_confidence, self.boxs_default, self.threshold,
                   class_id[i], x_min[i], y_min[i], x_max[i], y_max[i])
 
-        # final processisng
+        # convert to (3, 320, 320) Tensor
         preprocessing = transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize((self.image_size, self.image_size))
         ])
-
         image = preprocessing(img)
 
-        # if self.train:
-        #     image = self.colorJitter(image)
+        # color Jittering
+        if self.train:
+            image = self.colorJitter(image)
 
+        # return image names so we can save proper checkpoint images
         return image, torch.from_numpy(ann_box), torch.from_numpy(ann_confidence), self.img_names[index][:-4], img_height, img_width

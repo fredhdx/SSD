@@ -3,10 +3,19 @@ import cv2
 from dataset import iou
 from collections import Counter
 import torch
+from matplotlib import pyplot as plt
 
 
 colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
 #use [blue green red] to represent different classes
+
+def calculate_iou(box1, x_min, y_min, x_max, y_max):
+    inter = np.maximum(np.minimum(box1[2],x_max)-np.maximum(box1[0],x_min),0)\
+            * np.maximum(np.minimum(box1[3],y_max)-np.maximum(box1[1],y_min),0)
+    area_a = (box1[2]-box1[0])*(box1[3]-box1[1])
+    area_b = (x_max-x_min)*(y_max-y_min)
+    union = area_a + area_b - inter
+    return inter/np.maximum(union,1e-8)
 
 def visualize_pred(windowname, pred_confidence, pred_box, ann_confidence, ann_box, image_, boxs_default):
     #input:
@@ -136,7 +145,7 @@ def non_maximum_suppression(confidence_, box_, boxs_default, overlap=0.3, thresh
 
     # output
     bbox = np.zeros(box_.shape, dtype=np.float32)
-    confidence  = np.zeros(box_.shape, dtype=np.float32)
+    confidence  = np.zeros(confidence_.shape, dtype=np.float32)
     confidence[:, -1] = 1
 
     # non-maximum_suppresion algorithm
@@ -164,70 +173,161 @@ def non_maximum_suppression(confidence_, box_, boxs_default, overlap=0.3, thresh
 
     return confidence, bbox
 
+def build_map_dataset(total_annbox, total_annconf, total_predbox, total_predconf, boxs_default, num_classes=4):
+    ''' input: list of batched modle output, [(32, 540, 4)]
+        We want to loop through every batch, every image then extract gt boxes and predictions for each image.
+        output: two lists of gt boxes and predicted boxes
+    '''
+    pred_boxes = []
+    true_boxes = []
+    unique_class = set()
+
+    # generate true boxes
+    image_id = 0
+
+    print(f"there are {len(total_annbox)} batches")
+
+    # for each batch 
+    for batch_idx in range(len(total_annbox)):
+        batch_annconf = total_annconf[batch_idx]  # (32, 540, 4)
+        batch_predconf = total_predconf[batch_idx]
+        batch_annbox = total_annbox[batch_idx]
+        batch_predbox = total_predbox[batch_idx]
+
+        # for each image in batch
+        for image_idx in range(batch_annbox.shape[0]):
+
+            # one image: (540, 4)
+            annbox = batch_annbox[image_idx, :, :].reshape((-1, 4))
+            annconf = batch_annconf[image_idx, :, :].reshape((-1, 4))
+            predbox = batch_predbox[image_idx, :, :].reshape((-1, num_classes))
+            predconf = batch_predconf[image_idx, :, :].reshape((-1, num_classes))
+
+            predconf, predbox = non_maximum_suppression(predconf, predbox, boxs_default)
+
+            # convert to absolute coordinate
+            annbox = relative_boxes_to_absolute(annbox, boxs_default)[:, 4:]   # (540, 4)
+            predbox = relative_boxes_to_absolute(predbox, boxs_default)[:, 4:]
+
+            # restore gt boxes
+            indicies_gt = np.where(annconf[:, -1] == 0)[0]
+            for gt_idx in indicies_gt:
+                class_id = np.argmax(annconf[gt_idx])
+                true_boxes.append([image_id, class_id, 1.0, 
+                                   float(annbox[gt_idx, 0]), 
+                                   float(annbox[gt_idx, 1]), 
+                                   float(annbox[gt_idx, 2]), 
+                                   float(annbox[gt_idx, 3])])
+
+            # convert predictions
+            indices_pred = np.argwhere(predconf > 0.5)
+            for obj_idx in indices_pred:
+                _idx = obj_idx[0]
+                class_id = obj_idx[1]
+                if class_id == num_classes - 1:  # skip background
+                    continue
+                pred_score = predconf[_idx, class_id]
+                pred_boxes.append([image_id, class_id, pred_score, 
+                                   float(predbox[_idx, 0]), 
+                                   float(predbox[_idx, 1]), 
+                                   float(predbox[_idx, 2]), 
+                                   float(predbox[_idx, 3])])
+                
+                unique_class.add(class_id)
+            
+            image_id += 1  # increment image id
+        
+    print(f"unique predicted classes: {unique_class}")
+
+    return pred_boxes, true_boxes
 
 def generate_mAP(pred_boxes, true_boxes, threshold=0.5, num_classes=4):
-    #TODO: Generate mAP
+    # pred_boxes: [[image_id, class_id, pred_score, x_min, y_min, x_max, y_max]]
+    # true_boxes: [[image_id, class_idx, 1, x_min, y_min, x_max, y_max]]
     average_precisions = []
+    colormap = ['red', 'green', 'blue']
+    fig = plt.figure()
+    plt.title("Precision Recall Curve\nThreshold={threshold}")
     epsilon = 1e-6
 
-    for c in range(num_classes):
-        detections = []
-        grount_truths =[] 
+    print(f"size of pred_boxes: {len(pred_boxes)}")
+    print(f"size of true_boxes: {len(true_boxes)}")
 
-        for detection in pred_boxes:
-            if detection[1] == c:
-                detections.append(detection)
 
-        for true_box in true_boxes:
-            if true_box[1] == c:
-                grount_truths.append(true_box)
-
+    # for each class, we look at all predications that predict this class and gt that belong to this class
+    #   pred for image 1, pred for image 2, gt for image 5, gt for img 2, etc..
+    for c in range(num_classes - 1):  # [0, 1, 2, 3]
+        # filter predication and ground truth by class c
+        predications = [box for box in pred_boxes if box[1] == c]
+        ground_truths = [box for box in true_boxes if box[1] == c]
         
-        amount_bboxes = Counter(gt[0] for gt in grount_truths)
+        # set up image filtering counter: what image has how many gt truths
+        # [0, 0, ..] if each gt has been assigned 
+        # { 
+        #  image 1: [0, 0, 0],          # number of gt boxes
+        #  image 2: [0,0,0,0,0]
+        # }  
+        track_gt_per_image = Counter(gt[0] for gt in ground_truths)
+        for key, val in track_gt_per_image.items():
+            track_gt_per_image[key] = torch.zeros(val)
 
-        for key, val in amount_bboxes.items():
-            amount_bboxes[key] = torch.zero(val)
+        # sort predication by confidence score (for all images)
+        predications.sort(key=lambda x: x[2], reverse=True)
 
-        detections.sort(key=lambda x: x[2], reverse=True)
-        TP = torch.zeros((len(detections)))
-        FP = torch.zeros((len(detections)))
-        total_true_bboxes = len(grount_truths)
+        # get TP and FP for (all images)
+        # TP: this predication is correct (find a matching gt box from the same image)
+        # FP: this predication is not correct (no matching gt box found)
+        TP = torch.zeros((len(predications)))  # image 1 has 5 predictions, [0, 0, 0, 0, 0, 0]
+        FP = torch.zeros((len(predications)))
+        total_true_bboxes = len(ground_truths)
 
-        for detection_idx, detection in enumerate(detections):
-            ground_truth_img = [
-                bbox for bbox in grount_truths if bbox[0] == detection[0]
-            ]
+        if total_true_bboxes == 0:
+            continue
 
-            num_gts = len(ground_truth_img)
+        # For each predication (from all images)
+        for pred_idx, pred in enumerate(predications):
+            # this prediction's components
+            image_id = pred[0]
+
+            # find matching gt for this image 
+            target_gts = [box for box in ground_truths if box[0] == image_id]
             best_iou = 0
 
-            for idx, gt in enumerate(ground_truth_img):
-                iou = iou(torch.tensor(detection[3:]), torch.tensor(gt[3:]))
-
+            # find the most likely gt box for this prediction on the same image
+            for idx, gt in enumerate(target_gts):
+                # iou between prediction and grouth truth absolute positions [x1, y1, x2, y2]
+                iou = calculate_iou(np.array(pred[3:]), gt[3], gt[4], gt[5], gt[6])
                 if iou > best_iou:
                     best_iou = iou
-                    best_gt_idx = idx
+                    best_gt_idx = idx # out of target_gts
 
-            
+            # check if the predication can be deemed correct w.r.t. the most likely gt box
             if best_iou > threshold:
-                if amount_bboxes[detection[0]][best_gt_idx] == 0:
-                    TP[detection_idx] = 1
-                    amount_bboxes[detection[0]][best_gt_idx] = 1
-                else:
-                    FP[detection_idx] = 1
-
+                # amount_bboxes for image 1, test if this gt bbox has been used.
+                gts_in_image = track_gt_per_image[image_id]
+                if gts_in_image[best_gt_idx] == 0:
+                    TP[pred_idx] = 1  # so this predication is a true positive.
+                    gts_in_image[best_gt_idx] = 1
+                else: # this gt box has been assigned as correct prediction to another prediction
+                    FP[pred_idx] = 1 
+            else:
+                FP[pred_idx] = 1
             
-            TP_cumsum = torch.cumsum(TP, dim=0)
-            FP_cumsum = torch.cumsum(FP, dim=0)
-            recalls = TP_cumsum / (total_true_bboxes + epsilon)
-            precisions = torch.divide(TP_cumsum, (TP_cumsum + FP_cumsum + epsilon))
-            precisions = torch.cat((torch.tensor([1]), precisions))
-            recalls = torch.cat((torch.tensor([0]), recalls))
+        TP_cumsum = torch.cumsum(TP, dim=0)
+        FP_cumsum = torch.cumsum(FP, dim=0)
+        recalls = TP_cumsum / (total_true_bboxes + epsilon)
+        precisions = torch.divide(TP_cumsum, (TP_cumsum + FP_cumsum + epsilon))
+        precisions = torch.cat((torch.tensor([1]), precisions))
+        recalls = torch.cat((torch.tensor([0]), recalls))
 
-            average_precisions.append(torch.trapz(precisions, recalls))
+        average_precisions.append(torch.trapz(precisions, recalls))
+        plt.plot(recalls, precisions, color=colormap[c], label=f"Class: {c}")
     
+    plt.legend()
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.savefig(f"Precision-Recall_{threshold}.jpg")
     return sum(average_precisions) / len(average_precisions)
-                
 
 
 def save_state(network, optimizer, epoch, train_losses, val_losses, fn):
